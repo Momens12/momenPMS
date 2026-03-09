@@ -1,0 +1,5 @@
+{
+  "name": "Project Status Automator",
+  "description": "Automated tracking system for project statuses and phases, replacing manual Excel updates with scheduled Tuesday/Thursday reporting.",
+  "requestFramePermissions": []
+}
