@@ -196,6 +196,97 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/import", (req, res) => {
+    const { data } = req.body;
+    if (!Array.isArray(data)) {
+      return res.status(400).json({ error: "Invalid data format" });
+    }
+
+    try {
+      const transaction = db.transaction(() => {
+        // Clear existing data
+        db.prepare("DELETE FROM status_updates").run();
+        db.prepare("DELETE FROM stage_logs").run();
+        db.prepare("DELETE FROM projects").run();
+        db.prepare("DELETE FROM categories").run();
+
+        const categories = new Set<string>();
+        data.forEach((row: any) => {
+          if (row['Category']) categories.add(row['Category']);
+        });
+
+        const insertCategory = db.prepare("INSERT INTO categories (name) VALUES (?)");
+        categories.forEach(cat => insertCategory.run(cat));
+
+        const insertProject = db.prepare(`
+          INSERT INTO projects (
+            category, app_name, current_status, 
+            analysis_session_date, brd_submission_date, brd_review_date,
+            dev_session_date, development_start, development_end,
+            demo_start, demo_end, uat_start, uat_end,
+            deployment_start, deployment_end, go_live_start, go_live_end
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        const insertUpdate = db.prepare("INSERT INTO status_updates (project_id, status_date, note) VALUES (?, ?, ?)");
+        const insertLog = db.prepare("INSERT INTO stage_logs (project_id, stage, changed_at) VALUES (?, ?, ?)");
+
+        data.forEach((row: any) => {
+          const info = insertProject.run(
+            row['Category'] || '',
+            row['App Name'] || 'Untitled Project',
+            row['Current Stage'] || 'Analysis Session',
+            row['Analysis Session Date'] && row['Analysis Session Date'] !== 'N/A' ? row['Analysis Session Date'] : null,
+            row['BRD Submission Date'] && row['BRD Submission Date'] !== 'N/A' ? row['BRD Submission Date'] : null,
+            row['BRD Review Date'] && row['BRD Review Date'] !== 'N/A' ? row['BRD Review Date'] : null,
+            row['Dev Session Date'] && row['Dev Session Date'] !== 'N/A' ? row['Dev Session Date'] : null,
+            row['Development Start'] && row['Development Start'] !== 'N/A' ? row['Development Start'] : null,
+            row['Development End'] && row['Development End'] !== 'N/A' ? row['Development End'] : null,
+            row['Demo Start'] && row['Demo Start'] !== 'N/A' ? row['Demo Start'] : null,
+            row['Demo End'] && row['Demo End'] !== 'N/A' ? row['Demo End'] : null,
+            row['UAT Start'] && row['UAT Start'] !== 'N/A' ? row['UAT Start'] : null,
+            row['UAT End'] && row['UAT End'] !== 'N/A' ? row['UAT End'] : null,
+            row['Deployment Start'] && row['Deployment Start'] !== 'N/A' ? row['Deployment Start'] : null,
+            row['Deployment End'] && row['Deployment End'] !== 'N/A' ? row['Deployment End'] : null,
+            row['Go Live Start'] && row['Go Live Start'] !== 'N/A' ? row['Go Live Start'] : null,
+            row['Go Live End'] && row['Go Live End'] !== 'N/A' ? row['Go Live End'] : null
+          );
+
+          const projectId = info.lastInsertRowid;
+
+          // Initial log
+          insertLog.run(projectId, row['Current Stage'] || 'Analysis Session', new Date().toISOString());
+
+          // Handle status updates (date columns)
+          const fixedColumns = [
+            'Category', 'App Name', 'Current Stage', 'Analysis Session Date', 'BRD Submission Date', 
+            'BRD Review Date', 'Dev Session Date', 'Development Start', 'Development End', 
+            'Demo Start', 'Demo End', 'UAT Start', 'UAT End', 'Deployment Start', 
+            'Deployment End', 'Go Live Start', 'Go Live End'
+          ];
+
+          Object.keys(row).forEach(key => {
+            if (!fixedColumns.includes(key) && row[key]) {
+              // Try to normalize date to YYYY-MM-DD if possible
+              let statusDate = key;
+              const d = new Date(key);
+              if (!isNaN(d.getTime())) {
+                statusDate = d.toISOString().split('T')[0];
+              }
+              insertUpdate.run(projectId, statusDate, row[key]);
+            }
+          });
+        });
+      });
+
+      transaction();
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Import failed", err);
+      res.status(500).json({ error: "Database transaction failed" });
+    }
+  });
+
   app.use("/api", (req, res) => {
     res.status(404).json({ error: "API route not found" });
   });

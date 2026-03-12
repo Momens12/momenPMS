@@ -19,6 +19,7 @@ import {
   BarChart3,
   ChevronDown,
   Download,
+  Upload,
   Sparkles,
   Loader2,
   Building2,
@@ -69,6 +70,13 @@ export default function App() {
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [showStageDropdown, setShowStageDropdown] = useState(false);
   const [detailTab, setDetailTab] = useState<'history' | 'plan' | 'logs'>('history');
+  const [modal, setModal] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+    type: 'alert' | 'confirm';
+  }>({ show: false, title: '', message: '', type: 'alert' });
 
   useEffect(() => {
     loadProjects();
@@ -299,11 +307,85 @@ export default function App() {
     XLSX.writeFile(workbook, `Project_Status_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws);
+
+        setModal({
+          show: true,
+          title: "Confirm Import",
+          message: "This will delete all current data and replace it with the imported data. Are you sure?",
+          type: 'confirm',
+          onConfirm: async () => {
+            setLoading(true);
+            try {
+              const res = await fetch('/api/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data }),
+              });
+
+              if (res.ok) {
+                setModal({
+                  show: true,
+                  title: "Success",
+                  message: "Data imported successfully!",
+                  type: 'alert'
+                });
+                await Promise.all([loadProjects(), loadCategories()]);
+              } else {
+                const err = await res.json();
+                setModal({
+                  show: true,
+                  title: "Import Failed",
+                  message: err.error,
+                  type: 'alert'
+                });
+              }
+            } catch (err) {
+              console.error("Import error", err);
+              setModal({
+                show: true,
+                title: "Error",
+                message: "Failed to import data.",
+                type: 'alert'
+              });
+            } finally {
+              setLoading(false);
+            }
+          }
+        });
+      } catch (err) {
+        console.error("Import error", err);
+        setModal({
+          show: true,
+          title: "Parse Error",
+          message: "Failed to parse Excel file. Please ensure it matches the exported structure.",
+          type: 'alert'
+        });
+      } finally {
+        setLoading(false);
+      }
+      // Reset input
+      e.target.value = '';
+    };
+    reader.readAsBinaryString(file);
+  };
+
   const handleFixGrammar = async (text: string, field: 'name' | 'note' | 'editName') => {
     if (!text.trim()) return;
     setIsCorrecting(field);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"`,
@@ -491,6 +573,21 @@ export default function App() {
               <Download size={18} />
               Export
             </button>
+            <button 
+              onClick={() => document.getElementById('import-excel')?.click()}
+              className="bg-white text-gray-600 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors shadow-sm"
+              title="Import data from Excel"
+            >
+              <Upload size={18} />
+              Import
+            </button>
+            <input 
+              id="import-excel"
+              type="file"
+              accept=".xlsx, .xls"
+              className="hidden"
+              onChange={handleImportExcel}
+            />
             <button 
               onClick={() => {
                 setNewProjectName('');
@@ -1182,6 +1279,47 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Modal */}
+      <AnimatePresence>
+        {modal.show && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`p-2 rounded-lg ${modal.type === 'confirm' ? 'bg-amber-100 text-amber-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                  {modal.type === 'confirm' ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">{modal.title}</h3>
+              </div>
+              <p className="text-gray-600 text-sm mb-6 leading-relaxed">{modal.message}</p>
+              <div className="flex gap-3">
+                {modal.type === 'confirm' && (
+                  <button 
+                    onClick={() => setModal(prev => ({ ...prev, show: false }))}
+                    className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button 
+                  onClick={() => {
+                    if (modal.onConfirm) modal.onConfirm();
+                    setModal(prev => ({ ...prev, show: false }));
+                  }}
+                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors ${modal.type === 'confirm' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                >
+                  {modal.type === 'confirm' ? 'Confirm' : 'OK'}
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
