@@ -28,6 +28,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { GoogleGenAI } from "@google/genai";
+import OpenAI from 'openai';
 import { 
   BarChart, 
   Bar, 
@@ -70,6 +71,11 @@ export default function App() {
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [showStageDropdown, setShowStageDropdown] = useState(false);
   const [detailTab, setDetailTab] = useState<'history' | 'plan' | 'logs'>('history');
+  
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Project | 'last_update'; direction: 'asc' | 'desc' }>({ key: 'app_name', direction: 'asc' });
+  const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>(() => (localStorage.getItem('aiProvider') as 'gemini' | 'openai') || 'gemini');
+  const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem('openaiKey') || '');
+
   const [modal, setModal] = useState<{
     show: boolean;
     title: string;
@@ -255,6 +261,34 @@ export default function App() {
     );
   };
 
+  const handleSort = (key: keyof Project | 'last_update') => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const sortedProjects = [...projects]
+    .filter(p => {
+      const matchesSearch = p.app_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                           p.category.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStage = selectedStages.length === 0 || selectedStages.includes(p.current_status);
+      return matchesSearch && matchesStage;
+    })
+    .sort((a, b) => {
+      let aValue: any = a[sortConfig.key as keyof Project];
+      let bValue: any = b[sortConfig.key as keyof Project];
+
+      if (sortConfig.key === 'last_update') {
+        aValue = a.updates[0]?.status_date || '';
+        bValue = b.updates[0]?.status_date || '';
+      }
+
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+
   const handleExportExcel = () => {
     // Get all unique dates from all updates across all projects
     const allDates = Array.from(new Set(
@@ -385,18 +419,34 @@ export default function App() {
     if (!text.trim()) return;
     setIsCorrecting(field);
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"`,
-      });
+      let correctedText = '';
+      if (aiProvider === 'gemini') {
+        const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"`,
+        });
+        correctedText = response.text.trim().replace(/^"|"$/g, '');
+      } else {
+        if (!openaiKey) {
+          setModal({ show: true, title: 'Missing API Key', message: 'Please configure your OpenAI API key in the Setups tab.', type: 'alert' });
+          setIsCorrecting(null);
+          return;
+        }
+        const openai = new OpenAI({ apiKey: openaiKey, dangerouslyAllowBrowser: true });
+        const completion = await openai.chat.completions.create({
+          messages: [{ role: "user", content: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"` }],
+          model: "gpt-3.5-turbo",
+        });
+        correctedText = completion.choices[0].message.content?.trim().replace(/^"|"$/g, '') || '';
+      }
       
-      const correctedText = response.text.trim().replace(/^"|"$/g, '');
       if (field === 'name') setNewProjectName(correctedText);
       if (field === 'note') setNewStatusNote(correctedText);
       if (field === 'editName') setEditNameValue(correctedText);
     } catch (err) {
       console.error('AI correction failed', err);
+      setModal({ show: true, title: 'AI Error', message: 'Failed to correct text. Please check your API key and connection.', type: 'alert' });
     } finally {
       setIsCorrecting(null);
     }
@@ -499,364 +549,461 @@ export default function App() {
 
       {/* Main Content */}
       <main className="ml-64 p-8">
-        <header className="flex items-center justify-between mb-8">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">Project Overview</h2>
-            <p className="text-gray-500 text-sm">Automating Tuesday & Thursday status reports</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <button 
-                onClick={() => setShowStageDropdown(!showStageDropdown)}
-                className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[180px] justify-between"
-              >
-                <div className="flex items-center gap-2">
-                  <Filter className="text-gray-400" size={16} />
-                  <span className="truncate max-w-[120px]">
-                    {selectedStages.length === 0 ? 'All Stages' : 
-                     selectedStages.length === 1 ? selectedStages[0] : 
-                     `${selectedStages.length} Stages`}
-                  </span>
-                </div>
-                <ChevronDown size={16} className={`text-gray-400 transition-transform ${showStageDropdown ? 'rotate-180' : ''}`} />
-              </button>
+        {activeTab !== 'setups' && (
+          <>
+            <header className="flex items-center justify-between mb-8">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Project Overview</h2>
+                <p className="text-gray-500 text-sm">Automating Tuesday & Thursday status reports</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowStageDropdown(!showStageDropdown)}
+                    className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[180px] justify-between"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Filter className="text-gray-400" size={16} />
+                      <span className="truncate max-w-[120px]">
+                        {selectedStages.length === 0 ? 'All Stages' : 
+                         selectedStages.length === 1 ? selectedStages[0] : 
+                         `${selectedStages.length} Stages`}
+                      </span>
+                    </div>
+                    <ChevronDown size={16} className={`text-gray-400 transition-transform ${showStageDropdown ? 'rotate-180' : ''}`} />
+                  </button>
 
-              <AnimatePresence>
-                {showStageDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-20" onClick={() => setShowStageDropdown(false)} />
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 10 }}
-                      className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-30 p-2 overflow-hidden"
-                    >
-                      <div className="max-h-64 overflow-y-auto space-y-1">
-                        <button 
-                          onClick={() => { setSelectedStages([]); setShowStageDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                  <AnimatePresence>
+                    {showStageDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-20" onClick={() => setShowStageDropdown(false)} />
+                        <motion.div 
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 10 }}
+                          className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-30 p-2 overflow-hidden"
                         >
-                          Clear All
-                        </button>
-                        {PROJECT_STAGES.map(stage => (
-                          <label key={stage} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors">
-                            <input 
-                              type="checkbox"
-                              checked={selectedStages.includes(stage)}
-                              onChange={() => toggleStage(stage)}
-                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="text-sm text-gray-700">{stage}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search projects..." 
-                className="pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 w-64"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <button 
-              onClick={handleExportExcel}
-              className="bg-white text-gray-600 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors shadow-sm"
-              title="Export all data to Excel"
-            >
-              <Download size={18} />
-              Export
-            </button>
-            <button 
-              onClick={() => document.getElementById('import-excel')?.click()}
-              className="bg-white text-gray-600 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors shadow-sm"
-              title="Import data from Excel"
-            >
-              <Upload size={18} />
-              Import
-            </button>
-            <input 
-              id="import-excel"
-              type="file"
-              accept=".xlsx, .xls"
-              className="hidden"
-              onChange={handleImportExcel}
-            />
-            <button 
-              onClick={() => {
-                setNewProjectName('');
-                setShowAddProject(true);
-              }}
-              className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-indigo-700 transition-colors shadow-sm"
-            >
-              <Plus size={18} />
-              New Project
-            </button>
-          </div>
-        </header>
-
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-          </div>
-        ) : (
-          <div className="space-y-8">
-            {/* Stats Chart */}
-            <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                  <BarChart3 className="text-indigo-600" size={20} />
-                  <h3 className="font-bold text-gray-900">Project Distribution by Stage</h3>
-                </div>
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Total: {projects.length} Projects</span>
-              </div>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stageData} margin={{ top: 20, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                    <XAxis 
-                      dataKey="name" 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fontSize: 10, fill: '#94A3B8' }}
-                      interval={0}
-                      angle={-15}
-                      textAnchor="end"
-                    />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94A3B8' }} />
-                    <Tooltip 
-                      cursor={{ fill: '#F8FAFC' }}
-                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                    />
-                    <Bar 
-                      dataKey="count" 
-                      radius={[4, 4, 0, 0]} 
-                      barSize={40}
-                      onClick={(data) => {
-                        if (data && data.name) {
-                          setSelectedStages([data.name]);
-                        }
-                      }}
-                      className="cursor-pointer"
-                    >
-                      {stageData.map((entry, index) => (
-                        <Cell 
-                          key={`cell-${index}`} 
-                          fill={entry.color}
-                          fillOpacity={selectedStages.length === 0 || selectedStages.includes(entry.name) ? 1 : 0.3}
-                        />
-                      ))}
-                      <LabelList dataKey="count" position="top" style={{ fill: '#64748B', fontSize: 12, fontWeight: 'bold' }} />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-6">
-            {activeTab === 'dashboard' ? (
-              <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Category</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">App Name</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Current Stage</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Last Update</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {filteredProjects.map((project) => (
-                      <tr 
-                        key={project.id} 
-                        className="hover:bg-gray-50 transition-colors cursor-pointer group"
-                        onClick={() => setSelectedProject(project)}
-                      >
-                        <td className="px-6 py-4">
-                          <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-[10px] font-bold uppercase tracking-wide">
-                            {project.category}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">{project.app_name}</td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${getStageColor(project.current_status)}`} />
-                            <span className="text-sm text-gray-600 truncate max-w-[200px]">{project.current_status}</span>
+                          <div className="max-h-64 overflow-y-auto space-y-1">
+                            <button 
+                              onClick={() => { setSelectedStages([]); setShowStageDropdown(false); }}
+                              className="w-full text-left px-3 py-2 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                            >
+                              Clear All
+                            </button>
+                            {PROJECT_STAGES.map(stage => (
+                              <label key={stage} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors">
+                                <input 
+                                  type="checkbox"
+                                  checked={selectedStages.includes(stage)}
+                                  onChange={() => toggleStage(stage)}
+                                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                />
+                                <span className="text-sm text-gray-700">{stage}</span>
+                              </label>
+                            ))}
                           </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-500">
-                          {project.updates[0] ? new Date(project.updates[0].status_date).toLocaleDateString() : 'No updates'}
-                        </td>
-                        <td className="px-6 py-4">
-                          <button className="text-indigo-600 hover:text-indigo-800 font-medium text-sm flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            View Details <ChevronRight size={16} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Search projects..." 
+                    className="pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 w-64"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <button 
+                  onClick={handleExportExcel}
+                  className="bg-white text-gray-600 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors shadow-sm"
+                  title="Export all data to Excel"
+                >
+                  <Download size={18} />
+                  Export
+                </button>
+                <button 
+                  onClick={() => document.getElementById('import-excel')?.click()}
+                  className="bg-white text-gray-600 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors shadow-sm"
+                  title="Import data from Excel"
+                >
+                  <Upload size={18} />
+                  Import
+                </button>
+                <input 
+                  id="import-excel"
+                  type="file" 
+                  accept=".xlsx, .xls"
+                  className="hidden"
+                  onChange={handleImportExcel}
+                />
+                <button 
+                  onClick={() => {
+                    setNewProjectName('');
+                    setShowAddProject(true);
+                  }}
+                  className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-indigo-700 transition-colors shadow-sm"
+                >
+                  <Plus size={18} />
+                  New Project
+                </button>
+              </div>
+            </header>
+
+            {loading ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredProjects.map(project => {
-                  const stageDates = getCurrentStageDates(project);
-                  return (
-                    <div key={project.id} className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex flex-col">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{project.category}</span>
-                          <h3 className="font-bold text-lg mt-1">{project.app_name}</h3>
-                        </div>
-                        <History className="text-gray-300" size={20} />
-                      </div>
-
-                      {/* Current Stage Info */}
-                      <div className="mb-6 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className={`w-2 h-2 rounded-full ${getStageColor(project.current_status)}`} />
-                          <span className="text-xs font-bold text-gray-700 uppercase tracking-tight">Current Stage: {project.current_status}</span>
-                        </div>
-                        {stageDates && (
-                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500">
-                            {'date' in stageDates && stageDates.date && (
-                              <div className="flex items-center gap-1">
-                                <Calendar size={12} />
-                                <span>Date: {new Date(stageDates.date).toLocaleDateString()}</span>
-                              </div>
-                            )}
-                            {'start' in stageDates && stageDates.start && (
-                              <div className="flex items-center gap-1">
-                                <Clock size={12} />
-                                <span>Start: {new Date(stageDates.start).toLocaleDateString()}</span>
-                              </div>
-                            )}
-                            {'end' in stageDates && stageDates.end && (
-                              <div className="flex items-center gap-1">
-                                <ArrowRight size={12} />
-                                <span>End: {new Date(stageDates.end).toLocaleDateString()}</span>
-                              </div>
-                            )}
-                            {(!('date' in stageDates && stageDates.date) && !('start' in stageDates && stageDates.start)) && (
-                              <span className="italic">No dates set for this stage</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      
-                      <div className="space-y-4 flex-1">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Recent Status Logs</p>
-                        {project.updates.slice(0, 2).map((update, idx) => (
-                          <div key={update.id} className="relative pl-6 pb-4 last:pb-0">
-                            {idx !== project.updates.slice(0, 2).length - 1 && (
-                              <div className="absolute left-[7px] top-4 bottom-0 w-px bg-gray-100" />
-                            )}
-                            <div className="absolute left-0 top-1.5 w-3.5 h-3.5 rounded-full border-2 border-indigo-500 bg-white" />
-                            <p className="text-[10px] font-bold text-gray-400 uppercase">{new Date(update.status_date).toLocaleDateString()}</p>
-                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">{update.note}</p>
-                          </div>
-                        ))}
-                        {project.updates.length === 0 && (
-                          <p className="text-sm text-gray-400 italic">No status history yet.</p>
-                        )}
-                      </div>
-                      
-                      <button 
-                        onClick={() => setSelectedProject(project)}
-                        className="w-full mt-6 py-2 bg-gray-50 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-100 transition-colors"
-                      >
-                        FULL TIMELINE
-                      </button>
+              <div className="space-y-8">
+                {/* Stats Chart */}
+                <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-2">
+                      <BarChart3 className="text-indigo-600" size={20} />
+                      <h3 className="font-bold text-gray-900">Project Distribution by Stage</h3>
                     </div>
-                  );
-                })}
+                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Total: {projects.length} Projects</span>
+                  </div>
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={stageData} margin={{ top: 20, right: 10, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                        <XAxis 
+                          dataKey="name" 
+                          axisLine={false} 
+                          tickLine={false} 
+                          tick={{ fontSize: 10, fill: '#94A3B8' }}
+                          interval={0}
+                          angle={-15}
+                          textAnchor="end"
+                        />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94A3B8' }} />
+                        <Tooltip 
+                          cursor={{ fill: '#F8FAFC' }}
+                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                        />
+                        <Bar 
+                          dataKey="count" 
+                          radius={[4, 4, 0, 0]} 
+                          barSize={40}
+                          onClick={(data) => {
+                            if (data && data.name) {
+                              setSelectedStages([data.name]);
+                            }
+                          }}
+                          className="cursor-pointer"
+                        >
+                          {stageData.map((entry, index) => (
+                            <Cell 
+                              key={`cell-${index}`} 
+                              fill={entry.color}
+                              fillOpacity={selectedStages.length === 0 || selectedStages.includes(entry.name) ? 1 : 0.3}
+                            />
+                          ))}
+                          <LabelList dataKey="count" position="top" style={{ fill: '#64748B', fontSize: 12, fontWeight: 'bold' }} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-6">
+                {activeTab === 'dashboard' ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-200">
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap" onClick={() => handleSort('category')}>
+                              <div className="flex items-center gap-2">
+                                Category
+                                {sortConfig.key === 'category' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap min-w-[300px]" onClick={() => handleSort('app_name')}>
+                              <div className="flex items-center gap-2">
+                                Project Name
+                                {sortConfig.key === 'app_name' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap" onClick={() => handleSort('current_status')}>
+                              <div className="flex items-center gap-2">
+                                Status
+                                {sortConfig.key === 'current_status' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap min-w-[300px]" onClick={() => handleSort('last_update')}>
+                              <div className="flex items-center gap-2">
+                                Recent Update 1
+                                {sortConfig.key === 'last_update' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap min-w-[300px]">Recent Update 2</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {sortedProjects.map((project) => (
+                            <tr 
+                              key={project.id} 
+                              className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                              onClick={() => setSelectedProject(project)}
+                            >
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-[10px] font-bold uppercase tracking-wide">
+                                  {project.category}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap min-w-[300px]">{project.app_name}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-2 h-2 rounded-full ${getStageColor(project.current_status)}`} />
+                                  <span className="text-sm text-gray-600">{project.current_status}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap min-w-[300px]">
+                                {project.updates[0] ? (
+                                  <div className="max-w-[400px]">
+                                    <div className="text-[10px] font-bold text-gray-400 uppercase mb-1">{project.updates[0].status_date}</div>
+                                    <div className="text-xs text-gray-600 truncate" title={project.updates[0].note}>{project.updates[0].note}</div>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-gray-300 italic">No updates</span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap min-w-[300px]">
+                                {project.updates[1] ? (
+                                  <div className="max-w-[400px]">
+                                    <div className="text-[10px] font-bold text-gray-400 uppercase mb-1">{project.updates[1].status_date}</div>
+                                    <div className="text-xs text-gray-600 truncate" title={project.updates[1].note}>{project.updates[1].note}</div>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-gray-300 italic">No updates</span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <button className="text-indigo-600 hover:text-indigo-800 font-medium text-sm flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  View Details <ChevronRight size={16} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {sortedProjects.map(project => {
+                      const stageDates = getCurrentStageDates(project);
+                      return (
+                        <div key={project.id} className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex flex-col">
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{project.category}</span>
+                              <h3 className="font-bold text-lg mt-1">{project.app_name}</h3>
+                            </div>
+                            <History className="text-gray-300" size={20} />
+                          </div>
+
+                          {/* Current Stage Info */}
+                          <div className="mb-6 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className={`w-2 h-2 rounded-full ${getStageColor(project.current_status)}`} />
+                              <span className="text-xs font-bold text-gray-700 uppercase tracking-tight">Current Stage: {project.current_status}</span>
+                            </div>
+                            {stageDates && (
+                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500">
+                                {'date' in stageDates && stageDates.date && (
+                                  <div className="flex items-center gap-1">
+                                    <Calendar size={12} />
+                                    <span>Date: {new Date(stageDates.date).toLocaleDateString()}</span>
+                                  </div>
+                                )}
+                                {'start' in stageDates && stageDates.start && (
+                                  <div className="flex items-center gap-1">
+                                    <Clock size={12} />
+                                    <span>Start: {new Date(stageDates.start).toLocaleDateString()}</span>
+                                  </div>
+                                )}
+                                {'end' in stageDates && stageDates.end && (
+                                  <div className="flex items-center gap-1">
+                                    <ArrowRight size={12} />
+                                    <span>End: {new Date(stageDates.end).toLocaleDateString()}</span>
+                                  </div>
+                                )}
+                                {(!('date' in stageDates && stageDates.date) && !('start' in stageDates && stageDates.start)) && (
+                                  <span className="italic">No dates set for this stage</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="space-y-4 flex-1 overflow-hidden">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Status Logs</p>
+                            <div className="max-h-48 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
+                              {project.updates.map((update, idx) => (
+                                <div key={update.id} className="relative pl-6 pb-4 last:pb-0">
+                                  {idx !== project.updates.length - 1 && (
+                                    <div className="absolute left-[7px] top-4 bottom-0 w-px bg-gray-100" />
+                                  )}
+                                  <div className="absolute left-0 top-1.5 w-3.5 h-3.5 rounded-full border-2 border-indigo-500 bg-white" />
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase">{new Date(update.status_date).toLocaleDateString()}</p>
+                                  <p className="text-sm text-gray-600 mt-1">{update.note}</p>
+                                </div>
+                              ))}
+                              {project.updates.length === 0 && (
+                                <p className="text-sm text-gray-400 italic">No status history yet.</p>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <button 
+                            onClick={() => setSelectedProject(project)}
+                            className="w-full mt-6 py-2 bg-gray-50 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-100 transition-colors"
+                          >
+                            FULL TIMELINE
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                </div>
               </div>
             )}
-            </div>
-          </div>
+          </>
         )}
 
         {activeTab === 'setups' && (
-          <div className="space-y-8">
-            <div className="bg-white p-8 rounded-2xl border border-gray-200 shadow-sm">
-              <div className="flex items-center justify-between mb-8">
-                <div>
-                  <h3 className="text-xl font-bold text-gray-900">Category Management</h3>
-                  <p className="text-sm text-gray-500">Add, edit, or deactivate project categories</p>
+          <div className="max-w-4xl mx-auto space-y-8">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Application Settings</h2>
+                <p className="text-gray-500 text-sm">Manage categories and AI configuration</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {/* Category Management */}
+              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
+                    <Settings size={20} />
+                  </div>
+                  <h3 className="font-bold text-gray-900">Category Management</h3>
                 </div>
-                <form onSubmit={handleAddCat} className="flex gap-2">
+                
+                <form onSubmit={handleAddCat} className="flex gap-2 mb-6">
                   <input 
+                    type="text" 
+                    placeholder="New category name..." 
+                    className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     value={newCatName}
                     onChange={(e) => setNewCatName(e.target.value)}
-                    placeholder="New category name..."
-                    className="px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                   />
-                  <button 
-                    type="submit"
-                    className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm font-medium flex items-center gap-2"
-                  >
-                    <Plus size={18} /> Add
+                  <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">
+                    Add
                   </button>
                 </form>
+
+                <div className="space-y-2">
+                  {categories.map(cat => (
+                    <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl group">
+                      {editingCatId === cat.id ? (
+                        <div className="flex items-center gap-2 w-full">
+                          <input 
+                            type="text" 
+                            className="flex-1 px-3 py-1 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none"
+                            value={editCatName}
+                            onChange={(e) => setEditCatName(e.target.value)}
+                            autoFocus
+                          />
+                          <button onClick={() => handleUpdateCat(cat.id, { name: editCatName })} className="text-emerald-600 hover:bg-emerald-50 p-1 rounded">
+                            <Save size={16} />
+                          </button>
+                          <button onClick={() => setEditingCatId(null)} className="text-gray-400 hover:bg-gray-100 p-1 rounded">
+                            <X size={16} />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="text-sm font-medium text-gray-700">{cat.name}</span>
+                          <button 
+                            onClick={() => { setEditingCatId(cat.id); setEditCatName(cat.name); }}
+                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-indigo-600 transition-all"
+                          >
+                            <Edit3 size={16} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {categories.map(cat => (
-                  <div key={cat.id} className={`p-4 rounded-xl border transition-all ${cat.is_active ? 'bg-white border-gray-100 shadow-sm' : 'bg-gray-50 border-gray-200 opacity-60'}`}>
-                    {editingCatId === cat.id ? (
-                      <div className="flex items-center gap-2">
+              {/* AI Configuration */}
+              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 bg-purple-100 text-purple-600 rounded-lg">
+                    <Sparkles size={20} />
+                  </div>
+                  <h3 className="font-bold text-gray-900">AI Configuration</h3>
+                </div>
+
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">AI Provider</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        onClick={() => { setAiProvider('gemini'); localStorage.setItem('aiProvider', 'gemini'); }}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${aiProvider === 'gemini' ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                      >
+                        Google Gemini
+                      </button>
+                      <button 
+                        onClick={() => { setAiProvider('openai'); localStorage.setItem('aiProvider', 'openai'); }}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${aiProvider === 'openai' ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                      >
+                        OpenAI
+                      </button>
+                    </div>
+                  </div>
+
+                  {aiProvider === 'openai' && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">OpenAI API Key</label>
+                      <div className="flex gap-2">
                         <input 
-                          value={editCatName}
-                          onChange={(e) => setEditCatName(e.target.value)}
-                          className="flex-1 px-2 py-1 border border-indigo-500 rounded text-sm focus:outline-none"
-                          autoFocus
+                          type="password" 
+                          placeholder="sk-..." 
+                          className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          value={openaiKey}
+                          onChange={(e) => setOpenaiKey(e.target.value)}
                         />
                         <button 
-                          onClick={() => handleUpdateCat(cat.id, { name: editCatName })}
-                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
+                          onClick={() => { localStorage.setItem('openaiKey', openaiKey); setModal({ show: true, title: 'Saved', message: 'OpenAI API key saved locally.', type: 'alert' }); }}
+                          className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
                         >
-                          <Save size={16} />
-                        </button>
-                        <button onClick={() => setEditingCatId(null)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
-                          <X size={16} />
+                          Save
                         </button>
                       </div>
-                    ) : (
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-2 h-2 rounded-full ${cat.is_active ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                          <span className="font-bold text-gray-900">{cat.name}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button 
-                            onClick={() => {
-                              setEditingCatId(cat.id);
-                              setEditCatName(cat.name);
-                            }}
-                            className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-                            title="Edit Name"
-                          >
-                            <Edit3 size={14} />
-                          </button>
-                          <button 
-                            onClick={() => handleUpdateCat(cat.id, { is_active: cat.is_active ? 0 : 1 })}
-                            className={`p-1.5 rounded transition-colors ${cat.is_active ? 'text-gray-400 hover:text-red-600 hover:bg-red-50' : 'text-emerald-600 hover:bg-emerald-50'}`}
-                            title={cat.is_active ? 'Deactivate' : 'Activate'}
-                          >
-                            {cat.is_active ? <X size={14} /> : <CheckCircle size={14} />}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                      <p className="text-[10px] text-gray-400 mt-2">Key is stored in your browser's local storage.</p>
+                    </motion.div>
+                  )}
+
+                  {aiProvider === 'gemini' && (
+                    <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                      <p className="text-xs text-indigo-700 leading-relaxed">
+                        Gemini is configured via server environment variables. No additional setup required.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
