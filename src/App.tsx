@@ -27,8 +27,6 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { GoogleGenAI } from "@google/genai";
-import OpenAI from 'openai';
 import { 
   BarChart, 
   Bar, 
@@ -102,7 +100,6 @@ export default function App() {
     document.addEventListener('mouseup', onMouseUp);
   };
   const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>(() => (localStorage.getItem('aiProvider') as 'gemini' | 'openai') || 'gemini');
-  const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem('openaiKey') || '');
 
   const [modal, setModal] = useState<{
     show: boolean;
@@ -447,34 +444,25 @@ export default function App() {
     if (!text.trim()) return;
     setIsCorrecting(field);
     try {
-      let correctedText = '';
-      if (aiProvider === 'gemini') {
-        const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"`,
-        });
-        correctedText = response.text.trim().replace(/^"|"$/g, '');
-      } else {
-        if (!openaiKey) {
-          setModal({ show: true, title: 'Missing API Key', message: 'Please configure your OpenAI API key in the Setups tab.', type: 'alert' });
-          setIsCorrecting(null);
-          return;
-        }
-        const openai = new OpenAI({ apiKey: openaiKey, dangerouslyAllowBrowser: true });
-        const completion = await openai.chat.completions.create({
-          messages: [{ role: "user", content: `Correct the grammar only. Return ONLY the corrected text: "${text}"` }],
-          model: "gpt-3.5-turbo",
-        });
-        correctedText = completion.choices[0].message.content?.trim().replace(/^"|"$/g, '') || '';
+      const res = await fetch('/api/ai/correct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, provider: aiProvider }),
+      });
+      
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'AI correction failed');
       }
+      
+      const { correctedText } = await res.json();
       
       if (field === 'name') setNewProjectName(correctedText);
       if (field === 'note') setNewStatusNote(correctedText);
       if (field === 'editName') setEditNameValue(correctedText);
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI correction failed', err);
-      setModal({ show: true, title: 'AI Error', message: 'Failed to correct text. Please check your API key and connection.', type: 'alert' });
+      setModal({ show: true, title: 'AI Error', message: err.message || 'Failed to correct text. Please check your connection.', type: 'alert' });
     } finally {
       setIsCorrecting(null);
     }
@@ -1052,35 +1040,13 @@ export default function App() {
                     </div>
                   </div>
 
-                  {aiProvider === 'openai' && (
-                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">OpenAI API Key</label>
-                      <div className="flex gap-2">
-                        <input 
-                          type="password" 
-                          placeholder="sk-..." 
-                          className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                          value={openaiKey}
-                          onChange={(e) => setOpenaiKey(e.target.value)}
-                        />
-                        <button 
-                          onClick={() => { localStorage.setItem('openaiKey', openaiKey); setModal({ show: true, title: 'Saved', message: 'OpenAI API key saved locally.', type: 'alert' }); }}
-                          className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
-                        >
-                          Save
-                        </button>
-                      </div>
-                      <p className="text-[10px] text-gray-400 mt-2">Key is stored in your browser's local storage.</p>
-                    </motion.div>
-                  )}
-
-                  {aiProvider === 'gemini' && (
-                    <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
-                      <p className="text-xs text-indigo-700 leading-relaxed">
-                        Gemini is configured via server environment variables. No additional setup required.
-                      </p>
-                    </div>
-                  )}
+                  <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                    <p className="text-xs text-indigo-700 leading-relaxed">
+                      {aiProvider === 'gemini' 
+                        ? "Gemini is configured via server environment variables. No additional setup required."
+                        : "OpenAI is configured via server environment variables. No additional setup required."}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

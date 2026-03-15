@@ -2,6 +2,13 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
+import { fileURLToPath } from "url";
+import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
+import "dotenv/config";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const db = new Database("projects.db");
 
@@ -194,6 +201,40 @@ async function startServer() {
     }
 
     res.json({ success: true });
+  });
+
+  app.post("/api/ai/correct", async (req, res) => {
+    const { text, provider } = req.body;
+    if (!text) return res.status(400).json({ error: "Text is required" });
+
+    try {
+      let correctedText = "";
+      if (provider === "gemini") {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) return res.status(500).json({ error: "Gemini API key not configured on server" });
+        
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"`,
+        });
+        correctedText = response.text.trim().replace(/^"|"$/g, "");
+      } else {
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) return res.status(500).json({ error: "OpenAI API key not configured on server" });
+
+        const openai = new OpenAI({ apiKey });
+        const completion = await openai.chat.completions.create({
+          messages: [{ role: "user", content: `Correct the grammar only. Return ONLY the corrected text: "${text}"` }],
+          model: "gpt-3.5-turbo",
+        });
+        correctedText = completion.choices[0].message.content?.trim().replace(/^"|"$/g, "") || "";
+      }
+      res.json({ correctedText });
+    } catch (err: any) {
+      console.error("AI correction failed:", err);
+      res.status(500).json({ error: err.message || "AI correction failed" });
+    }
   });
 
   app.post("/api/import", (req, res) => {
