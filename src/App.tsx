@@ -73,6 +73,34 @@ export default function App() {
   const [detailTab, setDetailTab] = useState<'history' | 'plan' | 'logs'>('history');
   
   const [sortConfig, setSortConfig] = useState<{ key: keyof Project | 'last_update'; direction: 'asc' | 'desc' }>({ key: 'app_name', direction: 'asc' });
+  const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({
+    category: 150,
+    app_name: 300,
+    current_status: 150,
+    last_update: 300,
+    recent_update_2: 300,
+    action: 120
+  });
+
+  const handleResize = (key: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.pageX;
+    const startWidth = columnWidths[key];
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = Math.max(80, startWidth + (moveEvent.pageX - startX));
+      setColumnWidths(prev => ({ ...prev, [key]: newWidth }));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
   const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>(() => (localStorage.getItem('aiProvider') as 'gemini' | 'openai') || 'gemini');
   const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem('openaiKey') || '');
 
@@ -715,35 +743,85 @@ export default function App() {
                 {activeTab === 'dashboard' ? (
                   <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
+                      <table className="w-full text-left border-collapse table-fixed">
                         <thead>
                           <tr className="bg-gray-50 border-b border-gray-200">
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap" onClick={() => handleSort('category')}>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
+                              style={{ width: columnWidths.category }}
+                              onClick={() => handleSort('category')}
+                            >
                               <div className="flex items-center gap-2">
                                 Category
                                 {sortConfig.key === 'category' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
                               </div>
+                              <div 
+                                onMouseDown={(e) => handleResize('category', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
                             </th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap min-w-[300px]" onClick={() => handleSort('app_name')}>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
+                              style={{ width: columnWidths.app_name }}
+                              onClick={() => handleSort('app_name')}
+                            >
                               <div className="flex items-center gap-2">
                                 Project Name
                                 {sortConfig.key === 'app_name' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
                               </div>
+                              <div 
+                                onMouseDown={(e) => handleResize('app_name', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
                             </th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap" onClick={() => handleSort('current_status')}>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
+                              style={{ width: columnWidths.current_status }}
+                              onClick={() => handleSort('current_status')}
+                            >
                               <div className="flex items-center gap-2">
                                 Status
                                 {sortConfig.key === 'current_status' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
                               </div>
+                              <div 
+                                onMouseDown={(e) => handleResize('current_status', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
                             </th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap min-w-[300px]" onClick={() => handleSort('last_update')}>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
+                              style={{ width: columnWidths.last_update }}
+                              onClick={() => handleSort('last_update')}
+                            >
                               <div className="flex items-center gap-2">
                                 Recent Update 1
                                 {sortConfig.key === 'last_update' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
                               </div>
+                              <div 
+                                onMouseDown={(e) => handleResize('last_update', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
                             </th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap min-w-[300px]">Recent Update 2</th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Action</th>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap relative group/resizer"
+                              style={{ width: columnWidths.recent_update_2 }}
+                            >
+                              Recent Update 2
+                              <div 
+                                onMouseDown={(e) => handleResize('recent_update_2', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
+                            </th>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap relative group/resizer"
+                              style={{ width: columnWidths.action }}
+                            >
+                              Action
+                              <div 
+                                onMouseDown={(e) => handleResize('action', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -753,21 +831,21 @@ export default function App() {
                               className="hover:bg-gray-50 transition-colors cursor-pointer group"
                               onClick={() => setSelectedProject(project)}
                             >
-                              <td className="px-6 py-4 whitespace-nowrap">
+                              <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
                                 <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-[10px] font-bold uppercase tracking-wide">
                                   {project.category}
                                 </span>
                               </td>
-                              <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap min-w-[300px]">{project.app_name}</td>
-                              <td className="px-6 py-4 whitespace-nowrap">
+                              <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap overflow-hidden text-ellipsis">{project.app_name}</td>
+                              <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
                                 <div className="flex items-center gap-2">
                                   <div className={`w-2 h-2 rounded-full ${getStageColor(project.current_status)}`} />
                                   <span className="text-sm text-gray-600">{project.current_status}</span>
                                 </div>
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap min-w-[300px]">
+                              <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
                                 {project.updates[0] ? (
-                                  <div className="max-w-[400px]">
+                                  <div className="w-full">
                                     <div className="text-[10px] font-bold text-gray-400 uppercase mb-1">{project.updates[0].status_date}</div>
                                     <div className="text-xs text-gray-600 truncate" title={project.updates[0].note}>{project.updates[0].note}</div>
                                   </div>
@@ -775,9 +853,9 @@ export default function App() {
                                   <span className="text-xs text-gray-300 italic">No updates</span>
                                 )}
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap min-w-[300px]">
+                              <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
                                 {project.updates[1] ? (
-                                  <div className="max-w-[400px]">
+                                  <div className="w-full">
                                     <div className="text-[10px] font-bold text-gray-400 uppercase mb-1">{project.updates[1].status_date}</div>
                                     <div className="text-xs text-gray-600 truncate" title={project.updates[1].note}>{project.updates[1].note}</div>
                                   </div>
@@ -785,7 +863,7 @@ export default function App() {
                                   <span className="text-xs text-gray-300 italic">No updates</span>
                                 )}
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap">
+                              <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
                                 <button className="text-indigo-600 hover:text-indigo-800 font-medium text-sm flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                   View Details <ChevronRight size={16} />
                                 </button>
