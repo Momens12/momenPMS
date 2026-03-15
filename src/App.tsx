@@ -463,7 +463,7 @@ export default function App() {
         }
         const openai = new OpenAI({ apiKey: openaiKey, dangerouslyAllowBrowser: true });
         const completion = await openai.chat.completions.create({
-          messages: [{ role: "user", content: `Correct the grammar and professionalize the following text for a project management status report. Keep it concise. Return ONLY the corrected text: "${text}"` }],
+          messages: [{ role: "user", content: `Correct the grammar only. Return ONLY the corrected text: "${text}"` }],
           model: "gpt-3.5-turbo",
         });
         correctedText = completion.choices[0].message.content?.trim().replace(/^"|"$/g, '') || '';
