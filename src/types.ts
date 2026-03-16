@@ -18,11 +18,18 @@ export interface Category {
   is_active: number; // 0 or 1
 }
 
+export interface ProjectGroup {
+  id: number;
+  name: string;
+}
+
 export interface Project {
   id: number;
   category: string;
   app_name: string;
   current_status: string;
+  group_id?: number;
+  group_name?: string;
   updates: StatusUpdate[];
   stageLogs: StageLog[];
   analysis_session_date?: string;

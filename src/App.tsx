@@ -23,7 +23,9 @@ import {
   Sparkles,
   Loader2,
   Building2,
-  Settings
+  Settings,
+  Link as LinkIcon,
+  Unlink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -40,20 +42,24 @@ import {
   Cell,
   LabelList
 } from 'recharts';
-import { Project, StatusUpdate, StageLog, Category } from './types';
+import { Project, StatusUpdate, StageLog, Category, ProjectGroup } from './types';
 import { PROJECT_STAGES, ProjectStage } from './constants';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'setups'>('dashboard');
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showAddUpdate, setShowAddUpdate] = useState(false);
   const [newCatName, setNewCatName] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
   const [editingCatId, setEditingCatId] = useState<number | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
   const [editCatName, setEditCatName] = useState('');
+  const [editGroupName, setEditGroupName] = useState('');
   const [editingUpdate, setEditingUpdate] = useState<StatusUpdate | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isCorrecting, setIsCorrecting] = useState<string | null>(null);
@@ -76,6 +82,7 @@ export default function App() {
   const [sortConfig, setSortConfig] = useState<SortItem[]>([{ key: 'app_name', direction: 'asc' }]);
   const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({
     category: 150,
+    group: 150,
     app_name: 300,
     current_status: 150,
     last_update: 300,
@@ -116,8 +123,48 @@ export default function App() {
   useEffect(() => {
     loadProjects();
     loadCategories();
+    loadGroups();
     loadSettings();
   }, []);
+
+  const loadGroups = async () => {
+    try {
+      const res = await fetch('/api/groups');
+      const data = await res.json();
+      setGroups(data);
+    } catch (err) {
+      console.error('Failed to fetch groups', err);
+    }
+  };
+
+  const handleAddGroup = async (name: string) => {
+    if (!name.trim()) return;
+    try {
+      const res = await fetch('/api/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        loadGroups();
+      }
+    } catch (err) {
+      console.error('Failed to add group', err);
+    }
+  };
+
+  const handleLinkToGroup = async (projectId: number, groupId: number | null) => {
+    try {
+      await fetch(`/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_id: groupId }),
+      });
+      loadProjects();
+    } catch (err) {
+      console.error('Failed to link project to group', err);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -833,6 +880,20 @@ export default function App() {
                             </th>
                             <th 
                               className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
+                              style={{ width: columnWidths.group }}
+                              onClick={(e) => handleSort('group_id' as any, e)}
+                            >
+                              <div className="flex items-center gap-2">
+                                Group
+                                {renderSortIndicator('group_id')}
+                              </div>
+                              <div 
+                                onMouseDown={(e) => handleResize('group', e)}
+                                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-indigo-400 group-hover/resizer:bg-gray-200 transition-colors z-10"
+                              />
+                            </th>
+                            <th 
+                              className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
                               style={{ width: columnWidths.app_name }}
                               onClick={(e) => handleSort('app_name', e)}
                             >
@@ -907,6 +968,18 @@ export default function App() {
                                   {project.category}
                                 </span>
                               </td>
+                              <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
+                                {project.group_name ? (
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
+                                    <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                                      {project.group_name}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-gray-400 italic">No Group</span>
+                                )}
+                              </td>
                               <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap overflow-hidden text-ellipsis">{project.app_name}</td>
                               <td className="px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
                                 <div className="flex items-center gap-2">
@@ -953,7 +1026,14 @@ export default function App() {
                         <div key={project.id} className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex flex-col">
                           <div className="flex justify-between items-start mb-4">
                             <div>
-                              <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{project.category}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{project.category}</span>
+                                {project.group_name && (
+                                  <span className="flex items-center gap-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-bold uppercase tracking-wider border border-emerald-100">
+                                    <LinkIcon size={8} /> {project.group_name}
+                                  </span>
+                                )}
+                              </div>
                               <h3 className="font-bold text-lg mt-1">{project.app_name}</h3>
                             </div>
                             <History className="text-gray-300" size={20} />
@@ -1154,6 +1234,54 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {/* Group Management */}
+              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm md:col-span-2">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
+                    <LinkIcon size={20} />
+                  </div>
+                  <h3 className="font-bold text-gray-900">Project Grouping</h3>
+                  <p className="text-xs text-gray-500">Linked projects share status updates and stage changes</p>
+                </div>
+                
+                <div className="flex gap-2 mb-6">
+                  <input 
+                    type="text" 
+                    placeholder="New group name..." 
+                    className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                  />
+                  <button 
+                    onClick={() => { handleAddGroup(newGroupName); setNewGroupName(''); }}
+                    className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+                  >
+                    Add Group
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {groups.map(group => (
+                    <div key={group.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100 group">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-indigo-500" />
+                        <span className="text-sm font-medium text-gray-700">{group.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-[10px] text-gray-400">
+                          {projects.filter(p => p.group_id === group.id).length} projects
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  {groups.length === 0 && (
+                    <div className="col-span-full py-8 text-center bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                      <p className="text-sm text-gray-400 italic">No groups created yet</p>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1228,6 +1356,24 @@ export default function App() {
                       >
                         <Edit3 size={12} />
                       </button>
+                      
+                      {/* Group Link UI */}
+                      <div className="flex items-center gap-2 ml-4">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Group:</label>
+                        <select 
+                          value={selectedProject.group_id || ''}
+                          onChange={(e) => handleLinkToGroup(selectedProject.id, e.target.value ? Number(e.target.value) : null)}
+                          className="bg-transparent text-xs font-bold text-indigo-600 focus:outline-none border-b border-dashed border-indigo-200 hover:border-indigo-500 transition-colors"
+                        >
+                          <option value="">No Group</option>
+                          {groups.map(g => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))}
+                        </select>
+                        {selectedProject.group_id && (
+                          <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" title="Linked Project" />
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

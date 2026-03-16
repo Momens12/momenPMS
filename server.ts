@@ -54,6 +54,11 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS project_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE
+  );
 `);
 
 // Migration: Rename department to category if it exists
@@ -61,14 +66,18 @@ try {
   const tableInfo = db.prepare("PRAGMA table_info(projects)").all() as any[];
   const hasDepartment = tableInfo.some(col => col.name === 'department');
   const hasCategory = tableInfo.some(col => col.name === 'category');
+  const hasGroupId = tableInfo.some(col => col.name === 'group_id');
   
   if (hasDepartment && !hasCategory) {
     db.exec("ALTER TABLE projects RENAME COLUMN department TO category");
     console.log("Migrated projects table: renamed department to category");
   } else if (!hasDepartment && !hasCategory) {
-    // This case should be handled by CREATE TABLE IF NOT EXISTS, 
-    // but just in case it was created with neither
     db.exec("ALTER TABLE projects ADD COLUMN category TEXT");
+  }
+
+  if (!hasGroupId) {
+    db.exec("ALTER TABLE projects ADD COLUMN group_id INTEGER REFERENCES project_groups(id)");
+    console.log("Added group_id column to projects table");
   }
 } catch (err) {
   console.error("Migration failed or already applied", err);
@@ -113,7 +122,11 @@ async function startServer() {
 
   // API Routes
   app.get("/api/projects", (req, res) => {
-    const projects = db.prepare("SELECT * FROM projects").all();
+    const projects = db.prepare(`
+      SELECT p.*, pg.name as group_name 
+      FROM projects p 
+      LEFT JOIN project_groups pg ON p.group_id = pg.id
+    `).all();
     const updates = db.prepare("SELECT * FROM status_updates ORDER BY status_date DESC").all();
     const stageLogs = db.prepare("SELECT * FROM stage_logs ORDER BY changed_at DESC").all();
     
@@ -132,7 +145,7 @@ async function startServer() {
   });
 
   app.post("/api/categories", (req, res) => {
-    const { name } = req.body;
+    const { name = null } = req.body;
     try {
       const info = db.prepare("INSERT INTO categories (name) VALUES (?)").run(name);
       res.json({ id: info.lastInsertRowid, name, is_active: 1 });
@@ -157,7 +170,7 @@ async function startServer() {
   });
 
   app.post("/api/projects", (req, res) => {
-    const { category, app_name, current_status } = req.body;
+    const { category = null, app_name = null, current_status = 'Analysis Session' } = req.body;
     const info = db.prepare("INSERT INTO projects (category, app_name, current_status) VALUES (?, ?, ?)").run(category, app_name, current_status);
     const projectId = info.lastInsertRowid;
     
@@ -168,37 +181,98 @@ async function startServer() {
   });
 
   app.post("/api/updates", (req, res) => {
-    const { project_id, status_date, note } = req.body;
-    db.prepare("INSERT INTO status_updates (project_id, status_date, note) VALUES (?, ?, ?)").run(project_id, status_date, note);
+    const { project_id, status_date = null, note = null } = req.body;
+    const project = db.prepare("SELECT group_id FROM projects WHERE id = ?").get(project_id) as { group_id: number | null };
+    
+    if (project && project.group_id) {
+      const groupProjects = db.prepare("SELECT id FROM projects WHERE group_id = ?").all(project.group_id) as { id: number }[];
+      groupProjects.forEach(gp => {
+        db.prepare("INSERT INTO status_updates (project_id, status_date, note) VALUES (?, ?, ?)").run(gp.id, status_date, note);
+      });
+    } else {
+      db.prepare("INSERT INTO status_updates (project_id, status_date, note) VALUES (?, ?, ?)").run(project_id, status_date, note);
+    }
     res.json({ success: true });
   });
 
   app.patch("/api/updates/:id", (req, res) => {
     const { id } = req.params;
-    const { status_date, note } = req.body;
+    const { status_date = null, note = null } = req.body;
     db.prepare("UPDATE status_updates SET status_date = ?, note = ? WHERE id = ?").run(status_date, note, id);
     res.json({ success: true });
   });
 
   app.patch("/api/projects/:id", (req, res) => {
     const { id } = req.params;
-    const oldProject = db.prepare("SELECT current_status FROM projects WHERE id = ?").get(id) as { current_status: string };
+    const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as any;
     
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
     const bodyKeys = Object.keys(req.body);
     if (bodyKeys.length === 0) {
       return res.json({ success: true });
     }
 
-    const fields = bodyKeys.map(key => `${key} = ?`).join(", ");
-    const values = Object.values(req.body);
-    db.prepare(`UPDATE projects SET ${fields} WHERE id = ?`).run(...values, id);
+    const updateProject = (projectId: number, data: any) => {
+      const validColumns = [
+        'category', 'app_name', 'current_status', 'group_id',
+        'analysis_session_date', 'brd_submission_date', 'brd_review_date',
+        'dev_session_date', 'development_start', 'development_end',
+        'demo_start', 'demo_end', 'uat_start', 'uat_end',
+        'deployment_start', 'deployment_end', 'go_live_start', 'go_live_end'
+      ];
+      
+      const updateData: any = {};
+      Object.keys(data).forEach(key => {
+        if (validColumns.includes(key)) {
+          updateData[key] = data[key] === undefined ? null : data[key];
+        }
+      });
 
-    // Log stage change if current_status changed
-    if (req.body.current_status && req.body.current_status !== oldProject.current_status) {
-      db.prepare("INSERT INTO stage_logs (project_id, stage, changed_at) VALUES (?, ?, ?)").run(id, req.body.current_status, new Date().toISOString());
+      const keys = Object.keys(updateData);
+      if (keys.length === 0) return;
+
+      const fields = keys.map(key => `${key} = ?`).join(", ");
+      const values = Object.values(updateData);
+      db.prepare(`UPDATE projects SET ${fields} WHERE id = ?`).run(...values, projectId);
+
+      // Log stage change if current_status changed
+      if (updateData.current_status && updateData.current_status !== project.current_status) {
+        db.prepare("INSERT INTO stage_logs (project_id, stage, changed_at) VALUES (?, ?, ?)").run(projectId, updateData.current_status, new Date().toISOString());
+      }
+    };
+
+    // If group_id is being updated, it's a linking/unlinking action - don't propagate
+    const isGroupingAction = 'group_id' in req.body;
+
+    // If project is in a group and it's not a grouping action, update all projects in that group
+    if (project.group_id && !isGroupingAction) {
+      const groupProjects = db.prepare("SELECT id FROM projects WHERE group_id = ?").all(project.group_id) as { id: number }[];
+      groupProjects.forEach(gp => {
+        updateProject(gp.id, req.body);
+      });
+    } else {
+      updateProject(Number(id), req.body);
     }
 
     res.json({ success: true });
+  });
+
+  app.post("/api/groups", (req, res) => {
+    const { name } = req.body;
+    try {
+      const info = db.prepare("INSERT INTO project_groups (name) VALUES (?)").run(name);
+      res.json({ id: info.lastInsertRowid, name });
+    } catch (err) {
+      res.status(400).json({ error: "Group already exists" });
+    }
+  });
+
+  app.get("/api/groups", (req, res) => {
+    const groups = db.prepare("SELECT * FROM project_groups ORDER BY name ASC").all();
+    res.json(groups);
   });
 
   app.post("/api/import", (req, res) => {

@@ -14,6 +14,7 @@ export default defineConfig(({mode}) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
         'node-fetch': path.resolve(__dirname, 'src/fetch-polyfill.ts'),
+        'formdata-polyfill': path.resolve(__dirname, 'src/fetch-polyfill.ts'),
       },
     },
     server: {
