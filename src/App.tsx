@@ -72,7 +72,8 @@ export default function App() {
   const [showStageDropdown, setShowStageDropdown] = useState(false);
   const [detailTab, setDetailTab] = useState<'history' | 'plan' | 'logs'>('history');
   
-  const [sortConfig, setSortConfig] = useState<{ key: keyof Project | 'last_update'; direction: 'asc' | 'desc' }>({ key: 'app_name', direction: 'asc' });
+  type SortItem = { key: keyof Project | 'last_update'; direction: 'asc' | 'desc' };
+  const [sortConfig, setSortConfig] = useState<SortItem[]>([{ key: 'app_name', direction: 'asc' }]);
   const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({
     category: 150,
     app_name: 300,
@@ -320,11 +321,33 @@ export default function App() {
     );
   };
 
-  const handleSort = (key: keyof Project | 'last_update') => {
-    setSortConfig(prev => ({
-      key,
-      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
-    }));
+  const handleSort = (key: keyof Project | 'last_update', e?: React.MouseEvent) => {
+    setSortConfig(prev => {
+      const isShift = e?.shiftKey;
+      const existingIndex = prev.findIndex(s => s.key === key);
+      
+      if (isShift) {
+        if (existingIndex > -1) {
+          const newSort = [...prev];
+          newSort[existingIndex] = {
+            key,
+            direction: prev[existingIndex].direction === 'asc' ? 'desc' : 'asc'
+          };
+          return newSort;
+        } else {
+          return [...prev, { key, direction: 'asc' }];
+        }
+      } else {
+        // Single sort
+        if (prev.length === 1 && prev[0].key === key) {
+          return [{
+            key,
+            direction: prev[0].direction === 'asc' ? 'desc' : 'asc'
+          }];
+        }
+        return [{ key, direction: 'asc' }];
+      }
+    });
   };
 
   const sortedProjects = [...projects]
@@ -335,18 +358,35 @@ export default function App() {
       return matchesSearch && matchesStage;
     })
     .sort((a, b) => {
-      let aValue: any = a[sortConfig.key as keyof Project];
-      let bValue: any = b[sortConfig.key as keyof Project];
+      for (const sort of sortConfig) {
+        let aValue: any = a[sort.key as keyof Project];
+        let bValue: any = b[sort.key as keyof Project];
 
-      if (sortConfig.key === 'last_update') {
-        aValue = a.updates[0]?.status_date || '';
-        bValue = b.updates[0]?.status_date || '';
+        if (sort.key === 'last_update') {
+          aValue = a.updates[0]?.status_date || '';
+          bValue = b.updates[0]?.status_date || '';
+        }
+
+        if (aValue === bValue) continue;
+        
+        if (aValue < bValue) return sort.direction === 'asc' ? -1 : 1;
+        if (aValue > bValue) return sort.direction === 'asc' ? 1 : -1;
       }
-
-      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
       return 0;
     });
+
+  const renderSortIndicator = (key: string) => {
+    const index = sortConfig.findIndex(s => s.key === key);
+    if (index === -1) return null;
+    
+    const sort = sortConfig[index];
+    return (
+      <div className="flex items-center gap-1">
+        {sort.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />}
+        {sortConfig.length > 1 && <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1 rounded-full w-4 h-4 flex items-center justify-center font-bold">{index + 1}</span>}
+      </div>
+    );
+  };
 
   const handleExportExcel = () => {
     // Get all unique dates from all updates across all projects
@@ -780,11 +820,11 @@ export default function App() {
                             <th 
                               className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
                               style={{ width: columnWidths.category }}
-                              onClick={() => handleSort('category')}
+                              onClick={(e) => handleSort('category', e)}
                             >
                               <div className="flex items-center gap-2">
                                 Category
-                                {sortConfig.key === 'category' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                                {renderSortIndicator('category')}
                               </div>
                               <div 
                                 onMouseDown={(e) => handleResize('category', e)}
@@ -794,11 +834,11 @@ export default function App() {
                             <th 
                               className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
                               style={{ width: columnWidths.app_name }}
-                              onClick={() => handleSort('app_name')}
+                              onClick={(e) => handleSort('app_name', e)}
                             >
                               <div className="flex items-center gap-2">
                                 Project Name
-                                {sortConfig.key === 'app_name' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                                {renderSortIndicator('app_name')}
                               </div>
                               <div 
                                 onMouseDown={(e) => handleResize('app_name', e)}
@@ -808,11 +848,11 @@ export default function App() {
                             <th 
                               className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
                               style={{ width: columnWidths.current_status }}
-                              onClick={() => handleSort('current_status')}
+                              onClick={(e) => handleSort('current_status', e)}
                             >
                               <div className="flex items-center gap-2">
                                 Status
-                                {sortConfig.key === 'current_status' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                                {renderSortIndicator('current_status')}
                               </div>
                               <div 
                                 onMouseDown={(e) => handleResize('current_status', e)}
@@ -822,11 +862,11 @@ export default function App() {
                             <th 
                               className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 transition-colors whitespace-nowrap relative group/resizer" 
                               style={{ width: columnWidths.last_update }}
-                              onClick={() => handleSort('last_update')}
+                              onClick={(e) => handleSort('last_update', e)}
                             >
                               <div className="flex items-center gap-2">
                                 Recent Update 1
-                                {sortConfig.key === 'last_update' && (sortConfig.direction === 'asc' ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />)}
+                                {renderSortIndicator('last_update')}
                               </div>
                               <div 
                                 onMouseDown={(e) => handleResize('last_update', e)}
